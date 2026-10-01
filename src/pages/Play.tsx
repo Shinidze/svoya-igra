@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabase';
 import { GameRow, GroupCode } from '../types';
+import { MediaView } from './Editor';
 
-interface Player {
+interface Team {
   name: string;
   score: number;
 }
@@ -10,12 +11,15 @@ interface Player {
 export default function Play({ group, id }: { group: GroupCode; id: string }) {
   const [game, setGame] = useState<GameRow | null>(null);
   const [error, setError] = useState('');
-  const [players, setPlayers] = useState<Player[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [newName, setNewName] = useState('');
   const [started, setStarted] = useState(false);
   const [done, setDone] = useState<Set<string>>(new Set());
+  const [turn, setTurn] = useState(0);
   const [open, setOpen] = useState<{ ci: number; qi: number } | null>(null);
-  const [showAnswer, setShowAnswer] = useState(false);
+  const [answering, setAnswering] = useState(0);
+  const [tried, setTried] = useState<number[]>([]);
+  const [result, setResult] = useState<'ok' | 'fail' | null>(null);
   const [finished, setFinished] = useState(false);
 
   useEffect(() => {
@@ -38,27 +42,48 @@ export default function Play({ group, id }: { group: GroupCode; id: string }) {
   if (error) return <main className="container"><p className="error">{error}</p><a href={`#/g/${group}`} className="btn">В архив</a></main>;
   if (!game) return <main className="container"><p>Загрузка…</p></main>;
 
-  const addPlayer = () => {
+  const addTeam = () => {
     const name = newName.trim();
-    if (!name || players.length >= 8) return;
-    setPlayers([...players, { name, score: 0 }]);
+    if (!name || teams.length >= 8) return;
+    setTeams([...teams, { name, score: 0 }]);
     setNewName('');
   };
 
-  const closeQuestion = (pi?: number, delta?: number) => {
-    if (!open) return;
-    if (pi !== undefined && delta !== undefined) {
-      setPlayers((prev) => prev.map((p, i) => (i === pi ? { ...p, score: p.score + delta } : p)));
-    }
+  const openQuestion = (ci: number, qi: number) => {
+    setOpen({ ci, qi });
+    setAnswering(turn);
+    setTried([]);
+    setResult(null);
   };
 
-  const finishQuestion = () => {
+  const addScore = (ti: number, delta: number) =>
+    setTeams((prev) => prev.map((t, i) => (i === ti ? { ...t, score: t.score + delta } : t)));
+
+  const correct = (price: number) => {
+    addScore(answering, price);
+    setResult('ok');
+  };
+
+  const wrong = (price: number) => {
+    addScore(answering, -price);
+    const nowTried = [...tried, answering];
+    setTried(nowTried);
+    let next = -1;
+    for (let step = 1; step <= teams.length; step++) {
+      const cand = (answering + step) % teams.length;
+      if (!nowTried.includes(cand)) { next = cand; break; }
+    }
+    if (next === -1) setResult('fail');
+    else setAnswering(next);
+  };
+
+  const closeQuestion = () => {
     if (!open) return;
     const next = new Set(done);
     next.add(`${open.ci}-${open.qi}`);
     setDone(next);
     setOpen(null);
-    setShowAnswer(false);
+    setTurn((turn + 1) % teams.length);
     if (next.size >= total) setFinished(true);
   };
 
@@ -68,31 +93,31 @@ export default function Play({ group, id }: { group: GroupCode; id: string }) {
         <h2>{game.title}</h2>
         <p className="muted">Автор: {game.author || 'аноним'} · тем: {game.board.categories.length} · вопросов: {total}</p>
         <div className="card">
-          <h3>Кто играет?</h3>
+          <h3>Какие команды играют? (минимум 2)</h3>
           <div className="form-inline">
-            <input value={newName} maxLength={20} placeholder="Имя игрока" onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addPlayer()} />
-            <button className="btn" onClick={addPlayer}>Добавить</button>
+            <input value={newName} maxLength={20} placeholder="Название команды" onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addTeam()} />
+            <button className="btn" onClick={addTeam}>Добавить</button>
           </div>
           <ul className="players">
-            {players.map((p, i) => (
-              <li key={i}>{p.name} <button className="icon" onClick={() => setPlayers(players.filter((_, j) => j !== i))}>✕</button></li>
+            {teams.map((t, i) => (
+              <li key={i}>{t.name} <button className="icon" onClick={() => setTeams(teams.filter((_, j) => j !== i))}>✕</button></li>
             ))}
           </ul>
-          <button className="btn big" disabled={players.length === 0} onClick={() => setStarted(true)}>Начать игру</button>
+          <button className="btn big" disabled={teams.length < 2} onClick={() => setStarted(true)}>Начать игру</button>
         </div>
       </main>
     );
   }
 
   if (finished) {
-    const sorted = [...players].sort((a, b) => b.score - a.score);
+    const sorted = [...teams].sort((a, b) => b.score - a.score);
     return (
       <main className="container">
         <h2>Игра окончена 🏆</h2>
         <div className="card">
           <ol className="results">
-            {sorted.map((p, i) => (
-              <li key={i} className={i === 0 ? 'winner' : ''}><span>{p.name}</span><strong>{p.score}</strong></li>
+            {sorted.map((t, i) => (
+              <li key={i} className={i === 0 ? 'winner' : ''}><span>{t.name}</span><strong>{t.score}</strong></li>
             ))}
           </ol>
           <a href={`#/g/${group}`} className="btn">В архив</a>
@@ -106,6 +131,7 @@ export default function Play({ group, id }: { group: GroupCode; id: string }) {
   return (
     <main className="container wide">
       <h2>{game.title}</h2>
+      <p className="turn-note">Выбирает вопрос: {teams[turn].name}</p>
       <div className="board" style={{ gridTemplateColumns: `repeat(${game.board.categories.length}, minmax(110px, 1fr))` }}>
         {game.board.categories.map((c, ci) => (
           <div key={`h${ci}`} className="board-head">{c.name}</div>
@@ -116,7 +142,7 @@ export default function Play({ group, id }: { group: GroupCode; id: string }) {
             if (!qq) return <div key={`${ci}-${qi}`} className="cell empty" />;
             const isDone = done.has(`${ci}-${qi}`);
             return (
-              <button key={`${ci}-${qi}`} className={`cell ${isDone ? 'done' : ''}`} disabled={isDone} onClick={() => setOpen({ ci, qi })}>
+              <button key={`${ci}-${qi}`} className={`cell ${isDone ? 'done' : ''}`} disabled={isDone} onClick={() => openQuestion(ci, qi)}>
                 {isDone ? '' : qq.price}
               </button>
             );
@@ -125,8 +151,8 @@ export default function Play({ group, id }: { group: GroupCode; id: string }) {
       </div>
 
       <div className="scoreboard">
-        {players.map((p, i) => (
-          <div key={i} className="score"><span>{p.name}</span><strong>{p.score}</strong></div>
+        {teams.map((t, i) => (
+          <div key={i} className={`score ${i === turn ? 'turn' : ''}`}><span>{t.name}</span><strong>{t.score}</strong></div>
         ))}
       </div>
       <button className="btn ghost" onClick={() => setFinished(true)}>Завершить игру</button>
@@ -135,18 +161,32 @@ export default function Play({ group, id }: { group: GroupCode; id: string }) {
         <div className="modal">
           <div className="modal-box">
             <div className="modal-meta">{game.board.categories[open.ci].name} · {q.price}</div>
-            <p className="modal-q">{q.text}</p>
-            {showAnswer ? <p className="modal-a">Ответ: {q.answer}</p> : <button className="btn" onClick={() => setShowAnswer(true)}>Показать ответ</button>}
-            <div className="judge">
-              {players.map((p, i) => (
-                <div key={i} className="judge-row">
-                  <span>{p.name}</span>
-                  <button className="btn small ok" onClick={() => closeQuestion(i, q.price)}>+{q.price}</button>
-                  <button className="btn small bad" onClick={() => closeQuestion(i, -q.price)}>−{q.price}</button>
+            {q.text && <p className="modal-q">{q.text}</p>}
+            <MediaView media={q.media} />
+            {q.options && (
+              <div className="opt-list">
+                {q.options.map((o, i) => (
+                  <div key={i} className={`opt-item ${result && i === q.correct ? 'correct' : ''}`}>{String.fromCharCode(65 + i)}. {o}</div>
+                ))}
+              </div>
+            )}
+
+            {result === null ? (
+              <>
+                <p className="answering">Отвечает: {teams[answering].name}</p>
+                <div className="row-btns">
+                  <button className="btn ok" onClick={() => correct(q.price)}>Верно +{q.price}</button>
+                  <button className="btn bad" onClick={() => wrong(q.price)}>Неверно −{q.price}</button>
+                  <button className="btn ghost" onClick={() => setResult('fail')}>Никто не знает</button>
                 </div>
-              ))}
-            </div>
-            <button className="btn big" onClick={finishQuestion}>Закрыть вопрос</button>
+              </>
+            ) : (
+              <>
+                <p className="modal-a">{result === 'ok' ? `✅ ${teams[answering].name}: верно!` : '❌ Никто не ответил'}</p>
+                <p className="modal-a">Ответ: {q.answer}</p>
+                <button className="btn big" onClick={closeQuestion}>Дальше → ход команды «{teams[(turn + 1) % teams.length].name}»</button>
+              </>
+            )}
           </div>
         </div>
       )}

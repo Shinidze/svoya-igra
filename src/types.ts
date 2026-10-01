@@ -8,10 +8,20 @@ export const GROUPS: { code: GroupCode; name: string; emoji: string; text: strin
 
 export const groupName = (code: string) => GROUPS.find((g) => g.code === code)?.name ?? code;
 
+export type MediaType = 'image' | 'audio' | 'video';
+
+export interface Media {
+  type: MediaType;
+  url: string;
+}
+
 export interface Question {
   price: number;
   text: string;
   answer: string;
+  media?: Media;
+  options?: string[];
+  correct?: number;
 }
 
 export interface Category {
